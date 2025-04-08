@@ -35,9 +35,9 @@ Depends on your android version, there's a bug in android framework that may cau
 - Install Xposed framework and the Xposed module [uUeventPatch](https://github.com/fish4terrisa-MSDSM/uEventPatch)
 - Patch the `services.jar` of your ROM, using apktool or other decompile/recompile tools. Modify the smali code according to this [patch](https://t.me/linux_on_droid/14042).
 ## Todo
- [] - Use sepolicy instead of setting selinux to premissive.
- [] - Split the lxc part from the display part so that users can choose to handle the lxc by themselves
- [] - Patch the `services.jar` in the install process.
- [] - Find a way to apply this [patch](https://gerrit.libremobileos.com/c/LMODroid/platform_frameworks_native/+/12936)
+ - [ ] Use sepolicy instead of setting selinux to premissive.
+ - [ ] Split the lxc part from the display part so that users can choose to handle the lxc by themselves
+ - [ ] Patch the `services.jar` in the install process.
+ - [ ] Find a way to apply this [patch](https://gerrit.libremobileos.com/c/LMODroid/platform_frameworks_native/+/12936)
 ## Credits
  - [Lindroid](https://github.com/Linux-on-droid)
