@@ -1,19 +1,3 @@
-allow system_app lindroid_composer_service:service_manager add;
-type lindroid_file, file_type, data_file_type, core_data_file_type;
-
-# Allow system_app to remove and add the audio_socket file
-allow system_app lindroid_file:dir { remove_name add_name };
-
-# Allow system_app to unlink the audio_socket
-allow system_app lindroid_file:sock_file unlink;
-
-# Allow system_app to create, bind, and manage the socket
-allow system_app lindroid_file:sock_file { create write read };
-
-# Allow system_app to access the directory containing the socket (if necessary)
-allow system_app lindroid_file:dir { write search open };
-type lindroid_composer_service,        service_manager_type;
-
 allow ueventd tmpfs:lnk_file read;
 allow vendor_hal_perf_default su:dir search;
 allow vendor_hal_perf_default zygote:dir search;
@@ -25,3 +9,4 @@ allow hal_urcc_default vendor_latency_device:chr_file open;
 allow mediaserver untrusted_app_30:dir search;
 allow oplus_pmic_monitor servicemanager:binder call;
 allow vndservicemanager vendor_cnd:binder call;
+allow vendor_hal_perf_default crash_dump:dir search;
