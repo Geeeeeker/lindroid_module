@@ -10,3 +10,4 @@ allow mediaserver untrusted_app_30:dir search;
 allow oplus_pmic_monitor servicemanager:binder call;
 allow vndservicemanager vendor_cnd:binder call;
 allow vendor_hal_perf_default crash_dump:dir search;
+allow kernel device:chr_file getattr;
