@@ -55,16 +55,17 @@ jobs:
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
 
-      - name: Initialize AOSP Repo (exclude device, prebuilts…)
+      - name: Initialize AOSP Repo (keep device group)
         working-directory: ${{ github.workspace }}
         run: |
           mkdir workspace && cd workspace
+          # 注意：不再排除 -device，以保证 aosp_arm64 可用
           repo init --depth=1 --partial-clone \
             -u https://android.googlesource.com/platform/manifest \
             -b ${{ inputs.aosp_branch }} \
-            -g "default,-kernel,-device,-emulator,-tests,-docs,-prebuilts_apps,-prebuilts,-darwin"
+            -g "default,-kernel,-emulator,-tests,-docs,-prebuilts_apps,-prebuilts,-darwin"
 
-      - name: Remove Unnecessary Large Projects
+      - name: Remove Known Large / Rate‑Limited Projects
         working-directory: ${{ github.workspace }}/workspace
         run: |
           mkdir -p .repo/local_manifests
@@ -80,7 +81,13 @@ jobs:
           </manifest>
           EOF
 
-      - name: Sync Repo (low concurrency, retry)
+      - name: Check Disk Space Before Sync
+        working-directory: ${{ github.workspace }}/workspace
+        run: |
+          df -h .
+          df -i .
+
+      - name: Sync Repo (low concurrency, retry fetches)
         working-directory: ${{ github.workspace }}/workspace
         run: |
           repo sync -c --no-clone-bundle --no-tags --optimized-fetch \
@@ -92,27 +99,12 @@ jobs:
           df -h .
           df -i .
 
-      # 手动克隆必需的设备树（避免 local manifest 冲突）
-      - name: Clone Minimal Device Tree (skip if exists)
-        working-directory: ${{ github.workspace }}/workspace
-        env:
-          BRANCH: ${{ inputs.aosp_branch }}
-        run: |
-          for path in "device/generic/arm64" "device/generic/common"; do
-            if [ -d "$path" ]; then
-              echo "$path already exists, skipping."
-            else
-              repo_name="platform/$path"
-              echo "Cloning $repo_name into $path..."
-              git clone --depth=1 -b $BRANCH "https://android.googlesource.com/$repo_name" "$path"
-            fi
-          done
-
       - name: Clone Essential Prebuilts Manually (skip if exists)
         working-directory: ${{ github.workspace }}/workspace
         env:
           BRANCH: ${{ inputs.aosp_branch }}
         run: |
+          echo "Checking and cloning missing prebuilts..."
           declare -A projects=(
             ["prebuilts/clang/host/linux-x86"]="platform/prebuilts/clang/host/linux-x86"
             ["prebuilts/build-tools"]="platform/prebuilts/build-tools"
@@ -140,7 +132,7 @@ jobs:
         run: |
           cd frameworks/native
           wget https://github.com/LMODroid/platform_frameworks_native/commit/51b680f33b66e06b18725fdf9a54fa923c14a10b.patch -O lindroid.patch
-          git am --keep-cr lindroid.patch || (git apply --reject --whitespace=fix lindroid.patch && echo "Patch applied with apply")
+          git am --keep-cr lindroid.patch || (git apply --reject --whitespace=fix lindroid.patch && echo "Patch applied with apply (check manually if rejects)")
           rm lindroid.patch
           cd ../..
 
@@ -155,14 +147,16 @@ jobs:
       - name: Prepare Artifact
         if: success()
         run: |
+          # 产物路径基于 aosp_arm64 目标，输出目录为 out/target/product/generic_arm64
+          TARGET_DIR="generic_arm64"
           ARTIFACT_DIR=${{ github.workspace }}/lindroid_output
           mkdir -p $ARTIFACT_DIR/system_ext/app/LindroidUI
           mkdir -p $ARTIFACT_DIR/system_ext/lib64
-          cp -r ${{ github.workspace }}/workspace/out/target/product/aosp_arm64/system/system_ext/app/LindroidUI/* \
+          cp -r ${{ github.workspace }}/workspace/out/target/product/${TARGET_DIR}/system/system_ext/app/LindroidUI/* \
                 $ARTIFACT_DIR/system_ext/app/LindroidUI/
-          cp ${{ github.workspace }}/workspace/out/target/product/aosp_arm64/system/system_ext/lib64/libjni_lindroidui.so \
+          cp ${{ github.workspace }}/workspace/out/target/product/${TARGET_DIR}/system/system_ext/lib64/libjni_lindroidui.so \
              $ARTIFACT_DIR/system_ext/lib64/
-          cp ${{ github.workspace }}/workspace/out/target/product/aosp_arm64/system/system_ext/lib64/vendor.lindroid.composer-ndk.so \
+          cp ${{ github.workspace }}/workspace/out/target/product/${TARGET_DIR}/system/system_ext/lib64/vendor.lindroid.composer-ndk.so \
              $ARTIFACT_DIR/system_ext/lib64/
           echo "Built from AOSP ${{ inputs.aosp_branch }} | Lindroid branch: lindroid-21" > $ARTIFACT_DIR/build_info.txt
 
