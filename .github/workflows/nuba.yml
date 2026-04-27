@@ -15,7 +15,7 @@ jobs:
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 2048          # ⚡ 只留 2 GB 给根分区，把更多空间给构建卷
+          root-reserve-mb: 2048
           swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
@@ -50,12 +50,11 @@ jobs:
           chmod a+x ~/bin/repo
           echo "$HOME/bin" >> $GITHUB_PATH
 
-      # ---------- 关键修改：排除所有预构建，然后手动拉取必需的 ----------
       - name: Initialize AOSP Repo (Exclude all prebuilts)
         working-directory: ${{ github.workspace }}
         run: |
           mkdir workspace && cd workspace
-          # 排除 prebuilts 整个组，防止 ktlint / rust / module_sdk 等被同步
+          # 排除 prebuilts 整个组，防止大体积仓库被 checkout
           repo init --depth=1 --partial-clone \
             -u https://android.googlesource.com/platform/manifest \
             -b ${{ inputs.aosp_branch }} \
@@ -65,22 +64,17 @@ jobs:
         working-directory: ${{ github.workspace }}/workspace
         run: |
           mkdir -p .repo/local_manifests
+          # 注意：不再定义 <remote>，直接使用默认的 aosp remote
           cat > .repo/local_manifests/essential_prebuilts.xml << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <manifest>
-            <remote name="aosp" fetch="https://android.googlesource.com" />
-            <!-- Clang 编译器 (编译 native .so 必须) -->
-            <project path="prebuilts/clang/host/linux-x86" name="platform/prebuilts/clang/host/linux-x86" groups="default" />
-            <!-- 构建工具 (aapt2, d8, signapk 等) -->
-            <project path="prebuilts/build-tools" name="platform/prebuilts/build-tools" groups="default" />
-            <!-- Android SDK 框架 jar (编译 Java/Kotlin 必须) -->
-            <project path="prebuilts/sdk" name="platform/prebuilts/sdk" groups="default" />
-            <!-- Go 编译器 (Soong 需要) -->
-            <project path="prebuilts/go/linux-x86" name="platform/prebuilts/go/linux-x86" groups="default" />
+            <project path="prebuilts/clang/host/linux-x86" name="platform/prebuilts/clang/host/linux-x86" />
+            <project path="prebuilts/build-tools" name="platform/prebuilts/build-tools" />
+            <project path="prebuilts/sdk" name="platform/prebuilts/sdk" />
+            <project path="prebuilts/go/linux-x86" name="platform/prebuilts/go/linux-x86" />
           </manifest>
           EOF
 
-      # 同样拉取 Lindroid 相关仓库
       - name: Fetch Lindroid Sources (Corrected Branches)
         working-directory: ${{ github.workspace }}/workspace
         run: |
@@ -88,7 +82,6 @@ jobs:
           git clone -b lindroid-21 https://github.com/Linux-on-droid/vendor_lindroid.git vendor/lindroid
           git clone https://github.com/libhybris/libhybris.git external/libhybris
 
-      # 同步源码（带 checkout，但体积已大幅缩小）
       - name: Sync Repo
         working-directory: ${{ github.workspace }}/workspace
         run: |
