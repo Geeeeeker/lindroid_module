@@ -15,7 +15,7 @@ jobs:
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 2048
+          root-reserve-mb: 3072          # 给根分区多留一些余量
           swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
@@ -23,13 +23,19 @@ jobs:
           remove-codeql: 'true'
           remove-docker-images: 'true'
 
-      - name: Redirect APT Cache to Build Volume
+      - name: Redirect APT Cache & Lists to Build Volume
         run: |
           BUILD_VOL="${{ github.workspace }}"
-          sudo mkdir -p $BUILD_VOL/apt_cache
+          # 创建构建卷上的目录
+          sudo mkdir -p $BUILD_VOL/apt_cache $BUILD_VOL/apt_lists
+          # 重定向缓存
           echo "Dir::Cache::archives \"$BUILD_VOL/apt_cache\";" | sudo tee /etc/apt/apt.conf.d/99custom
+          # 移动并重定向 lists 目录
+          sudo mv /var/lib/apt/lists/* $BUILD_VOL/apt_lists/ 2>/dev/null || true
+          sudo rm -rf /var/lib/apt/lists
+          sudo ln -s $BUILD_VOL/apt_lists /var/lib/apt/lists
+          # 清理残余
           sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
           sudo chmod 1777 /tmp
 
       - name: Install Build Dependencies
@@ -59,7 +65,6 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           mkdir workspace && cd workspace
-          # 注意：不再排除 -device，以保证 aosp_arm64 可用
           repo init --depth=1 --partial-clone \
             -u https://android.googlesource.com/platform/manifest \
             -b ${{ inputs.aosp_branch }} \
@@ -147,7 +152,6 @@ jobs:
       - name: Prepare Artifact
         if: success()
         run: |
-          # 产物路径基于 aosp_arm64 目标，输出目录为 out/target/product/generic_arm64
           TARGET_DIR="generic_arm64"
           ARTIFACT_DIR=${{ github.workspace }}/lindroid_output
           mkdir -p $ARTIFACT_DIR/system_ext/app/LindroidUI
