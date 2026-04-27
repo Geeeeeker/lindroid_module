@@ -1,0 +1,100 @@
+name: Build LindroidUI Module (Generic)
+
+on:
+  workflow_dispatch:
+    inputs:
+      aosp_branch:
+        description: 'AOSP branch/tag (e.g. android-14.0.0_r52)'
+        required: true
+        default: 'android-14.0.0_r52'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Maximize Build Space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 2048
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex \
+            g++-multilib gcc-multilib git git-lfs gnupg gperf imagemagick \
+            lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool \
+            libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev \
+            libwxgtk3.0-gtk3-dev libxml2 libxml2-utils lzop pngcrush \
+            rsync schedtool squashfs-tools xsltproc zip zlib1g-dev \
+            python3 python-is-python3
+
+      - name: Install Repo
+        run: |
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Initialize & Sync Minimal AOSP Source
+        run: |
+          mkdir workspace && cd workspace
+
+          # 浅克隆 + 部分克隆，排除内核、模拟器、预构建应用等，大幅减少下载量
+          repo init --depth=1 --partial-clone \
+            -u https://android.googlesource.com/platform/manifest \
+            -b ${{ inputs.aosp_branch }} \
+            -g "default,-kernel,-device,-emulator,-tests,-docs,-prebuilts_apps,-darwin"
+
+          # 同步，保留足够历史即可
+          repo sync -c --no-clone-bundle --no-tags --optimized-fetch \
+            --prune --force-sync -j$(nproc)
+
+      - name: Fetch Lindroid & Apply Patches
+        working-directory: ./workspace
+        run: |
+          # 拉取 Lindroid 相关仓库到正确位置
+          git clone https://github.com/Linux-on-droid/lindroid-drm-loopback.git vendor/lindroid-drm-loopback
+          git clone https://github.com/Linux-on-droid/vendor_lindroid.git vendor/lindroid
+          git clone https://github.com/libhybris/libhybris.git external/libhybris
+
+          # 应用 frameworks/native 补丁（来自 LMODroid，Android 14 适用）
+          cd frameworks/native
+          wget https://github.com/LMODroid/platform_frameworks_native/commit/51b680f33b66e06b18725fdf9a54fa923c14a10b.patch -O lindroid.patch
+          git am --keep-cr lindroid.patch || (git apply --reject --whitespace=fix lindroid.patch && echo "Patch applied with rejects, please verify manually")
+          rm lindroid.patch
+          cd ../..
+
+      - name: Build LindroidUI
+        working-directory: ./workspace
+        run: |
+          source build/envsetup.sh
+          lunch aosp_arm64-userdebug
+          # 进入 LindroidUI 所在目录并编译（具体路径需根据实际仓库结构微调）
+          cd vendor/lindroid-drm-loopback/LindroidUI
+          mma
+
+      - name: Prepare Artifact
+        if: success()
+        run: |
+          mkdir -p lindroid_output/system_ext/app
+          mkdir -p lindroid_output/system_ext/lib64
+
+          # 产物路径（请根据实际编译输出核对）
+          cp -r out/target/product/generic_arm64/system/system_ext/app/LindroidUI lindroid_output/system_ext/app/
+          cp out/target/product/generic_arm64/system/system_ext/lib64/libjni_lindroidui.so lindroid_output/system_ext/lib64/
+          cp out/target/product/generic_arm64/system/system_ext/lib64/vendor.lindroid.composer-ndk.so lindroid_output/system_ext/lib64/
+
+          # 生成说明文件
+          echo "Compiled on AOSP ${{ inputs.aosp_branch }}" > lindroid_output/build_info.txt
+
+      - name: Upload LindroidUI Module
+        uses: actions/upload-artifact@v4
+        with:
+          name: LindroidUI-Generic-A14
+          path: lindroid_output/
