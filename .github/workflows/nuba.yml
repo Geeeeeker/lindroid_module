@@ -59,7 +59,6 @@ jobs:
             -b ${{ inputs.aosp_branch }} \
             -g "default,-kernel,-device,-emulator,-tests,-docs,-prebuilts_apps,-prebuilts,-darwin"
 
-      # 移除已知无用且可能触发限速的项目
       - name: Remove Known Large / Rate‑Limited Projects
         working-directory: ${{ github.workspace }}/workspace
         run: |
@@ -71,10 +70,8 @@ jobs:
             <remove-project name="platform/prebuilts/rust"/>
             <remove-project name="platform/external/setupcompat"/>
             <remove-project name="platform/sdk"/>
-            <!-- Rust crates 触发 HTTP 429，一并排除 -->
             <remove-project name="platform/external/rust/crates/vhost-user-backend"/>
             <remove-project name="platform/external/rust/crates/virtio-queue"/>
-            <!-- 如有其他 Rust crate 报错，可在这里继续添加 -->
           </manifest>
           EOF
 
@@ -84,7 +81,6 @@ jobs:
           df -h .
           df -i .
 
-      # 降低并发 + 开启重试，避免 429 限速
       - name: Sync Repo (low concurrency, retry fetches)
         working-directory: ${{ github.workspace }}/workspace
         run: |
@@ -97,23 +93,27 @@ jobs:
           df -h .
           df -i .
 
-      - name: Clone Essential Prebuilts Manually
+      # 只克隆缺失的预构建，避免覆盖已有目录
+      - name: Clone Essential Prebuilts Manually (skip if exists)
         working-directory: ${{ github.workspace }}/workspace
         env:
           BRANCH: ${{ inputs.aosp_branch }}
         run: |
-          git clone --depth=1 -b $BRANCH \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            prebuilts/clang/host/linux-x86
-          git clone --depth=1 -b $BRANCH \
-            https://android.googlesource.com/platform/prebuilts/build-tools \
-            prebuilts/build-tools
-          git clone --depth=1 -b $BRANCH \
-            https://android.googlesource.com/platform/prebuilts/sdk \
-            prebuilts/sdk
-          git clone --depth=1 -b $BRANCH \
-            https://android.googlesource.com/platform/prebuilts/go/linux-x86 \
-            prebuilts/go/linux-x86
+          echo "Checking and cloning missing prebuilts..."
+          declare -A projects=(
+            ["prebuilts/clang/host/linux-x86"]="platform/prebuilts/clang/host/linux-x86"
+            ["prebuilts/build-tools"]="platform/prebuilts/build-tools"
+            ["prebuilts/sdk"]="platform/prebuilts/sdk"
+            ["prebuilts/go/linux-x86"]="platform/prebuilts/go/linux-x86"
+          )
+          for dir in "${!projects[@]}"; do
+            if [ -d "$dir" ]; then
+              echo "$dir already exists, skipping."
+            else
+              echo "Cloning $dir..."
+              git clone --depth=1 -b $BRANCH "https://android.googlesource.com/${projects[$dir]}" "$dir"
+            fi
+          done
 
       - name: Fetch Lindroid Sources
         working-directory: ${{ github.workspace }}/workspace
