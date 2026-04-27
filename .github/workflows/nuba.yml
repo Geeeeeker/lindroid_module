@@ -59,7 +59,7 @@ jobs:
             -b ${{ inputs.aosp_branch }} \
             -g "default,-kernel,-device,-emulator,-tests,-docs,-prebuilts_apps,-prebuilts,-darwin"
 
-      # 只移除明确存在且巨大的项目（根据之前错误日志调整）
+      # 移除已知无用的大项目，包括刚刚报错的两个
       - name: Remove Known Large Unused Projects
         working-directory: ${{ github.workspace }}/workspace
         run: |
@@ -67,12 +67,21 @@ jobs:
           cat > .repo/local_manifests/remove_unused.xml << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <manifest>
-            <!-- 这些项目在之前日志中出现过，且对 LindroidUI 无依赖，可安全移除 -->
             <remove-project name="platform/system/nfc"/>
             <remove-project name="platform/prebuilts/rust"/>
-            <!-- 如果已知其他无用且大的项目，可在此追加 -->
+            <!-- 刚刚 checkout 失败的项目，移除即可 -->
+            <remove-project name="platform/external/setupcompat"/>
+            <remove-project name="platform/sdk"/>
           </manifest>
           EOF
+
+      - name: Check Disk Space Before Sync
+        working-directory: ${{ github.workspace }}/workspace
+        run: |
+          echo "=== Disk space before sync ==="
+          df -h .
+          echo "=== Inode usage ==="
+          df -i .
 
       - name: Sync Repo
         working-directory: ${{ github.workspace }}/workspace
@@ -80,7 +89,15 @@ jobs:
           repo sync -c --no-clone-bundle --no-tags --optimized-fetch \
             --force-sync -j$(nproc)
 
-      # 手动克隆编译必需的四个预构建（不在清单中，避免冲突）
+      - name: Check Disk Space After Sync
+        working-directory: ${{ github.workspace }}/workspace
+        run: |
+          echo "=== Disk space after sync ==="
+          df -h .
+          echo "=== Inode usage ==="
+          df -i .
+
+      # 手动克隆必需的预构建（Clang, Build-tools, SDK, Go）
       - name: Clone Essential Prebuilts Manually
         working-directory: ${{ github.workspace }}/workspace
         env:
