@@ -61,7 +61,6 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           mkdir workspace && cd workspace
-          # 保留 device 和 emulator 组，确保 aosp_arm64 目标存在
           repo init --depth=1 --partial-clone \
             -u https://android.googlesource.com/platform/manifest \
             -b ${{ inputs.aosp_branch }} \
@@ -100,6 +99,27 @@ jobs:
         run: |
           df -h .
           df -i .
+
+      # 确保 goldfish 设备树存在（否则 lunch 报错）
+      - name: Ensure Goldfish Device Tree Exists
+        working-directory: ${{ github.workspace }}/workspace
+        env:
+          BRANCH: ${{ inputs.aosp_branch }}
+        run: |
+          if [ ! -d "device/generic/goldfish" ]; then
+            echo "device/generic/goldfish missing – cloning it..."
+            mkdir -p device/generic
+            git clone --depth=1 -b $BRANCH \
+              https://android.googlesource.com/platform/device/generic/goldfish \
+              device/generic/goldfish
+          fi
+          if [ ! -d "device/generic/common" ]; then
+            echo "device/generic/common missing – cloning it..."
+            mkdir -p device/generic
+            git clone --depth=1 -b $BRANCH \
+              https://android.googlesource.com/platform/device/generic/common \
+              device/generic/common
+          fi
 
       - name: Clone Essential Prebuilts Manually (skip if exists)
         working-directory: ${{ github.workspace }}/workspace
