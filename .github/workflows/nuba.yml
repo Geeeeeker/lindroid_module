@@ -55,7 +55,7 @@ jobs:
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
 
-      - name: Initialize AOSP Repo (Exclude all prebuilts)
+      - name: Initialize AOSP Repo (exclude device, kernel, prebuilts…)
         working-directory: ${{ github.workspace }}
         run: |
           mkdir workspace && cd workspace
@@ -64,10 +64,12 @@ jobs:
             -b ${{ inputs.aosp_branch }} \
             -g "default,-kernel,-device,-emulator,-tests,-docs,-prebuilts_apps,-prebuilts,-darwin"
 
-      - name: Remove Known Large / Rate‑Limited Projects
+      # 移除无用大项目 + 添加最小的通用设备树
+      - name: Local Manifests (remove unused + add minimal generic device)
         working-directory: ${{ github.workspace }}/workspace
         run: |
           mkdir -p .repo/local_manifests
+
           cat > .repo/local_manifests/remove_unused.xml << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <manifest>
@@ -77,6 +79,14 @@ jobs:
             <remove-project name="platform/sdk"/>
             <remove-project name="platform/external/rust/crates/vhost-user-backend"/>
             <remove-project name="platform/external/rust/crates/virtio-queue"/>
+          </manifest>
+          EOF
+
+          cat > .repo/local_manifests/minimal_device.xml << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <manifest>
+            <project path="device/generic/arm64" name="platform/device/generic/arm64" />
+            <project path="device/generic/common" name="platform/device/generic/common" />
           </manifest>
           EOF
 
@@ -103,7 +113,6 @@ jobs:
         env:
           BRANCH: ${{ inputs.aosp_branch }}
         run: |
-          echo "Checking and cloning missing prebuilts..."
           declare -A projects=(
             ["prebuilts/clang/host/linux-x86"]="platform/prebuilts/clang/host/linux-x86"
             ["prebuilts/build-tools"]="platform/prebuilts/build-tools"
@@ -131,8 +140,7 @@ jobs:
         run: |
           cd frameworks/native
           wget https://github.com/LMODroid/platform_frameworks_native/commit/51b680f33b66e06b18725fdf9a54fa923c14a10b.patch -O lindroid.patch
-          # 先用 git am 尝试，失败则用 apply
-          git am --keep-cr lindroid.patch || (git apply --reject --whitespace=fix lindroid.patch && echo "Patch applied with apply (check manual if rejects)")
+          git am --keep-cr lindroid.patch || (git apply --reject --whitespace=fix lindroid.patch && echo "Patch applied with apply")
           rm lindroid.patch
           cd ../..
 
@@ -140,31 +148,21 @@ jobs:
         working-directory: ${{ github.workspace }}/workspace
         run: |
           source build/envsetup.sh
-          lunch sdk_phone_arm64-userdebug
+          lunch aosp_arm64-userdebug
           cd vendor/lindroid-drm-loopback/LindroidUI
           mma
 
       - name: Prepare Artifact
         if: success()
         run: |
-          # 产物路径因 lunch 目标改变而不同，需确认
-          # sdk_phone_arm64 产品输出在 out/target/product/emulator_arm64 或 sdk_phone_arm64
-          # 我们先尝试查找可能的路径
-          cd ${{ github.workspace }}/workspace/out/target/product
-          TARGET_DIR=$(ls -d sdk_phone_arm64 emulator_arm64 generic_arm64 2>/dev/null | head -1)
-          if [ -z "$TARGET_DIR" ]; then
-            echo "Error: Could not find output directory"
-            exit 1
-          fi
-          echo "Using output directory: $TARGET_DIR"
           ARTIFACT_DIR=${{ github.workspace }}/lindroid_output
           mkdir -p $ARTIFACT_DIR/system_ext/app/LindroidUI
           mkdir -p $ARTIFACT_DIR/system_ext/lib64
-          cp -r ${{ github.workspace }}/workspace/out/target/product/$TARGET_DIR/system/system_ext/app/LindroidUI/* \
+          cp -r ${{ github.workspace }}/workspace/out/target/product/aosp_arm64/system/system_ext/app/LindroidUI/* \
                 $ARTIFACT_DIR/system_ext/app/LindroidUI/
-          cp ${{ github.workspace }}/workspace/out/target/product/$TARGET_DIR/system/system_ext/lib64/libjni_lindroidui.so \
+          cp ${{ github.workspace }}/workspace/out/target/product/aosp_arm64/system/system_ext/lib64/libjni_lindroidui.so \
              $ARTIFACT_DIR/system_ext/lib64/
-          cp ${{ github.workspace }}/workspace/out/target/product/$TARGET_DIR/system/system_ext/lib64/vendor.lindroid.composer-ndk.so \
+          cp ${{ github.workspace }}/workspace/out/target/product/aosp_arm64/system/system_ext/lib64/vendor.lindroid.composer-ndk.so \
              $ARTIFACT_DIR/system_ext/lib64/
           echo "Built from AOSP ${{ inputs.aosp_branch }} | Lindroid branch: lindroid-21" > $ARTIFACT_DIR/build_info.txt
 
