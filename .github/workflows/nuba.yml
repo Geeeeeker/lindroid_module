@@ -55,7 +55,7 @@ jobs:
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
 
-      - name: Initialize AOSP Repo (exclude device, kernel, prebuilts…)
+      - name: Initialize AOSP Repo (exclude device, prebuilts…)
         working-directory: ${{ github.workspace }}
         run: |
           mkdir workspace && cd workspace
@@ -64,12 +64,10 @@ jobs:
             -b ${{ inputs.aosp_branch }} \
             -g "default,-kernel,-device,-emulator,-tests,-docs,-prebuilts_apps,-prebuilts,-darwin"
 
-      # 移除无用大项目 + 添加最小的通用设备树
-      - name: Local Manifests (remove unused + add minimal generic device)
+      - name: Remove Unnecessary Large Projects
         working-directory: ${{ github.workspace }}/workspace
         run: |
           mkdir -p .repo/local_manifests
-
           cat > .repo/local_manifests/remove_unused.xml << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <manifest>
@@ -82,21 +80,7 @@ jobs:
           </manifest>
           EOF
 
-          cat > .repo/local_manifests/minimal_device.xml << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <manifest>
-            <project path="device/generic/arm64" name="platform/device/generic/arm64" />
-            <project path="device/generic/common" name="platform/device/generic/common" />
-          </manifest>
-          EOF
-
-      - name: Check Disk Space Before Sync
-        working-directory: ${{ github.workspace }}/workspace
-        run: |
-          df -h .
-          df -i .
-
-      - name: Sync Repo (low concurrency, retry fetches)
+      - name: Sync Repo (low concurrency, retry)
         working-directory: ${{ github.workspace }}/workspace
         run: |
           repo sync -c --no-clone-bundle --no-tags --optimized-fetch \
@@ -107,6 +91,22 @@ jobs:
         run: |
           df -h .
           df -i .
+
+      # 手动克隆必需的设备树（避免 local manifest 冲突）
+      - name: Clone Minimal Device Tree (skip if exists)
+        working-directory: ${{ github.workspace }}/workspace
+        env:
+          BRANCH: ${{ inputs.aosp_branch }}
+        run: |
+          for path in "device/generic/arm64" "device/generic/common"; do
+            if [ -d "$path" ]; then
+              echo "$path already exists, skipping."
+            else
+              repo_name="platform/$path"
+              echo "Cloning $repo_name into $path..."
+              git clone --depth=1 -b $BRANCH "https://android.googlesource.com/$repo_name" "$path"
+            fi
+          done
 
       - name: Clone Essential Prebuilts Manually (skip if exists)
         working-directory: ${{ github.workspace }}/workspace
