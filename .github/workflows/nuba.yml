@@ -50,6 +50,11 @@ jobs:
           chmod a+x ~/bin/repo
           echo "$HOME/bin" >> $GITHUB_PATH
 
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+
       - name: Initialize AOSP Repo (Exclude all prebuilts)
         working-directory: ${{ github.workspace }}
         run: |
@@ -93,7 +98,6 @@ jobs:
           df -h .
           df -i .
 
-      # 只克隆缺失的预构建，避免覆盖已有目录
       - name: Clone Essential Prebuilts Manually (skip if exists)
         working-directory: ${{ github.workspace }}/workspace
         env:
@@ -127,7 +131,8 @@ jobs:
         run: |
           cd frameworks/native
           wget https://github.com/LMODroid/platform_frameworks_native/commit/51b680f33b66e06b18725fdf9a54fa923c14a10b.patch -O lindroid.patch
-          git am --keep-cr lindroid.patch || (git apply --reject --whitespace=fix lindroid.patch && echo "Patch applied with rejects, check manually")
+          # 先用 git am 尝试，失败则用 apply
+          git am --keep-cr lindroid.patch || (git apply --reject --whitespace=fix lindroid.patch && echo "Patch applied with apply (check manual if rejects)")
           rm lindroid.patch
           cd ../..
 
@@ -135,21 +140,31 @@ jobs:
         working-directory: ${{ github.workspace }}/workspace
         run: |
           source build/envsetup.sh
-          lunch aosp_arm64-userdebug
+          lunch sdk_phone_arm64-userdebug
           cd vendor/lindroid-drm-loopback/LindroidUI
           mma
 
       - name: Prepare Artifact
         if: success()
         run: |
+          # 产物路径因 lunch 目标改变而不同，需确认
+          # sdk_phone_arm64 产品输出在 out/target/product/emulator_arm64 或 sdk_phone_arm64
+          # 我们先尝试查找可能的路径
+          cd ${{ github.workspace }}/workspace/out/target/product
+          TARGET_DIR=$(ls -d sdk_phone_arm64 emulator_arm64 generic_arm64 2>/dev/null | head -1)
+          if [ -z "$TARGET_DIR" ]; then
+            echo "Error: Could not find output directory"
+            exit 1
+          fi
+          echo "Using output directory: $TARGET_DIR"
           ARTIFACT_DIR=${{ github.workspace }}/lindroid_output
           mkdir -p $ARTIFACT_DIR/system_ext/app/LindroidUI
           mkdir -p $ARTIFACT_DIR/system_ext/lib64
-          cp -r ${{ github.workspace }}/workspace/out/target/product/generic_arm64/system/system_ext/app/LindroidUI/* \
+          cp -r ${{ github.workspace }}/workspace/out/target/product/$TARGET_DIR/system/system_ext/app/LindroidUI/* \
                 $ARTIFACT_DIR/system_ext/app/LindroidUI/
-          cp ${{ github.workspace }}/workspace/out/target/product/generic_arm64/system/system_ext/lib64/libjni_lindroidui.so \
+          cp ${{ github.workspace }}/workspace/out/target/product/$TARGET_DIR/system/system_ext/lib64/libjni_lindroidui.so \
              $ARTIFACT_DIR/system_ext/lib64/
-          cp ${{ github.workspace }}/workspace/out/target/product/generic_arm64/system/system_ext/lib64/vendor.lindroid.composer-ndk.so \
+          cp ${{ github.workspace }}/workspace/out/target/product/$TARGET_DIR/system/system_ext/lib64/vendor.lindroid.composer-ndk.so \
              $ARTIFACT_DIR/system_ext/lib64/
           echo "Built from AOSP ${{ inputs.aosp_branch }} | Lindroid branch: lindroid-21" > $ARTIFACT_DIR/build_info.txt
 
