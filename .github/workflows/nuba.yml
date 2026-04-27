@@ -15,7 +15,7 @@ jobs:
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 2048
+          root-reserve-mb: 1024          # 极简保留
           swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
@@ -59,14 +59,34 @@ jobs:
             -b ${{ inputs.aosp_branch }} \
             -g "default,-kernel,-device,-emulator,-tests,-docs,-prebuilts_apps,-prebuilts,-darwin"
 
-      # 同步清单中的全部源码（体积已大幅缩小）
+      # ---------- 关键：移除仍然被默认清单包含的大项目 ----------
+      - name: Remove Unnecessary Large Projects
+        working-directory: ${{ github.workspace }}/workspace
+        run: |
+          mkdir -p .repo/local_manifests
+          cat > .repo/local_manifests/remove_unused.xml << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <manifest>
+            <!-- 这些模块对于 LindroidUI 不是必需的，移除可节省 5-10 GB -->
+            <remove-project name="platform/system/nfc"/>
+            <remove-project name="platform/system/bt"/>
+            <remove-project name="platform/system/media"/>
+            <remove-project name="platform/system/connectivity"/>
+            <remove-project name="platform/system/update_engine"/>
+            <remove-project name="platform/prebuilts/rust"/>
+            <remove-project name="platform/prebuilts/gcc/linux-x86"/>
+            <remove-project name="platform/external/chromium-webview"/>
+            <!-- 如果仍不够，可继续添加 -->
+          </manifest>
+          EOF
+
       - name: Sync Repo
         working-directory: ${{ github.workspace }}/workspace
         run: |
           repo sync -c --no-clone-bundle --no-tags --optimized-fetch \
             --force-sync -j$(nproc)
 
-      # 手动克隆编译必需的四个预构建（不在清单中，避免冲突）
+      # 手动克隆必需的预构建（Clang, Build-tools, SDK, Go）
       - name: Clone Essential Prebuilts Manually
         working-directory: ${{ github.workspace }}/workspace
         env:
