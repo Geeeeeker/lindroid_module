@@ -1,10 +1,10 @@
-name: Build LindroidUI Module (Generic)
+name: Build LindroidUI Module for Android 14 (AOSP)
 
 on:
   workflow_dispatch:
     inputs:
       aosp_branch:
-        description: 'AOSP branch/tag (e.g. android-14.0.0_r52)'
+        description: 'AOSP branch/tag (must match your device ROM, e.g. android-14.0.0_r52)'
         required: true
         default: 'android-14.0.0_r52'
 
@@ -12,10 +12,11 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
+      # ========== 1. 扩展构建空间（并保护好根分区） ==========
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 2048
+          root-reserve-mb: 6144          # 给根分区留 6 GB
           swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
@@ -23,6 +24,20 @@ jobs:
           remove-codeql: 'true'
           remove-docker-images: 'true'
 
+      # ========== 2. 将 apt / tmp 等重定向到构建卷 ==========
+      - name: Redirect APT & Temp to Build Volume
+        run: |
+          BUILD_VOL="${{ github.workspace }}"
+          sudo mkdir -p $BUILD_VOL/apt_cache $BUILD_VOL/tmp
+          echo "Dir::Cache::archives \"$BUILD_VOL/apt_cache\";" | sudo tee /etc/apt/apt.conf.d/99custom
+          echo "TMPDIR=$BUILD_VOL/tmp" >> $GITHUB_ENV
+          echo "TMP=$BUILD_VOL/tmp" >> $GITHUB_ENV
+          echo "TEMP=$BUILD_VOL/tmp" >> $GITHUB_ENV
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          df -h /
+
+      # ========== 3. 安装编译依赖 ==========
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
@@ -41,60 +56,69 @@ jobs:
           chmod a+x ~/bin/repo
           echo "$HOME/bin" >> $GITHUB_PATH
 
+      # ========== 4. 初始化并同步最小 AOSP 源码 ==========
       - name: Initialize & Sync Minimal AOSP Source
         run: |
+          cd ${{ github.workspace }}
           mkdir workspace && cd workspace
 
-          # 浅克隆 + 部分克隆，排除内核、模拟器、预构建应用等，大幅减少下载量
           repo init --depth=1 --partial-clone \
             -u https://android.googlesource.com/platform/manifest \
             -b ${{ inputs.aosp_branch }} \
             -g "default,-kernel,-device,-emulator,-tests,-docs,-prebuilts_apps,-darwin"
 
-          # 同步，保留足够历史即可
           repo sync -c --no-clone-bundle --no-tags --optimized-fetch \
             --prune --force-sync -j$(nproc)
 
-      - name: Fetch Lindroid & Apply Patches
-        working-directory: ./workspace
+      # ========== 5. 拉取 Lindroid 组件（修正分支） ==========
+      - name: Fetch Lindroid Sources (Corrected Branches)
+        working-directory: ${{ github.workspace }}/workspace
         run: |
-          # 拉取 Lindroid 相关仓库到正确位置
+          # lindroid-drm-loopback 没有 lindroid-21 分支，这里使用 master
           git clone https://github.com/Linux-on-droid/lindroid-drm-loopback.git vendor/lindroid-drm-loopback
-          git clone https://github.com/Linux-on-droid/vendor_lindroid.git vendor/lindroid
+          # vendor_lindroid 有 lindroid-21 分支，所以指定拉取它
+          git clone -b lindroid-21 https://github.com/Linux-on-droid/vendor_lindroid.git vendor/lindroid
           git clone https://github.com/libhybris/libhybris.git external/libhybris
 
-          # 应用 frameworks/native 补丁（来自 LMODroid，Android 14 适用）
+      # ========== 6. 应用 frameworks/native 补丁（LXC 所需） ==========
+      - name: Apply frameworks/native Patch
+        working-directory: ${{ github.workspace }}/workspace
+        run: |
           cd frameworks/native
           wget https://github.com/LMODroid/platform_frameworks_native/commit/51b680f33b66e06b18725fdf9a54fa923c14a10b.patch -O lindroid.patch
-          git am --keep-cr lindroid.patch || (git apply --reject --whitespace=fix lindroid.patch && echo "Patch applied with rejects, please verify manually")
+          git am --keep-cr lindroid.patch || (git apply --reject --whitespace=fix lindroid.patch && echo "Patch applied with rejects, check manually")
           rm lindroid.patch
           cd ../..
 
+      # ========== 7. 编译 LindroidUI 模块 ==========
       - name: Build LindroidUI
-        working-directory: ./workspace
+        working-directory: ${{ github.workspace }}/workspace
         run: |
           source build/envsetup.sh
           lunch aosp_arm64-userdebug
-          # 进入 LindroidUI 所在目录并编译（具体路径需根据实际仓库结构微调）
+          # LindroidUI 可能位于 vendor/lindroid-drm-loopback/LindroidUI（需根据实际目录调整）
           cd vendor/lindroid-drm-loopback/LindroidUI
           mma
 
+      # ========== 8. 收集产物 ==========
       - name: Prepare Artifact
         if: success()
         run: |
-          mkdir -p lindroid_output/system_ext/app
-          mkdir -p lindroid_output/system_ext/lib64
+          ARTIFACT_DIR=${{ github.workspace }}/lindroid_output
+          mkdir -p $ARTIFACT_DIR/system_ext/app/LindroidUI
+          mkdir -p $ARTIFACT_DIR/system_ext/lib64
 
-          # 产物路径（请根据实际编译输出核对）
-          cp -r out/target/product/generic_arm64/system/system_ext/app/LindroidUI lindroid_output/system_ext/app/
-          cp out/target/product/generic_arm64/system/system_ext/lib64/libjni_lindroidui.so lindroid_output/system_ext/lib64/
-          cp out/target/product/generic_arm64/system/system_ext/lib64/vendor.lindroid.composer-ndk.so lindroid_output/system_ext/lib64/
+          cp -r ${{ github.workspace }}/workspace/out/target/product/generic_arm64/system/system_ext/app/LindroidUI/* \
+                $ARTIFACT_DIR/system_ext/app/LindroidUI/
+          cp ${{ github.workspace }}/workspace/out/target/product/generic_arm64/system/system_ext/lib64/libjni_lindroidui.so \
+             $ARTIFACT_DIR/system_ext/lib64/
+          cp ${{ github.workspace }}/workspace/out/target/product/generic_arm64/system/system_ext/lib64/vendor.lindroid.composer-ndk.so \
+             $ARTIFACT_DIR/system_ext/lib64/
 
-          # 生成说明文件
-          echo "Compiled on AOSP ${{ inputs.aosp_branch }}" > lindroid_output/build_info.txt
+          echo "Built from AOSP ${{ inputs.aosp_branch }} | Lindroid branch: lindroid-21" > $ARTIFACT_DIR/build_info.txt
 
       - name: Upload LindroidUI Module
         uses: actions/upload-artifact@v4
         with:
-          name: LindroidUI-Generic-A14
-          path: lindroid_output/
+          name: LindroidUI-Android14-lindroid21
+          path: ${{ github.workspace }}/lindroid_output
