@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       aosp_branch:
-        description: 'AOSP branch/tag (must match your device ROM, e.g. android-14.0.0_r52)'
+        description: 'AOSP branch/tag (e.g. android-14.0.0_r52)'
         required: true
         default: 'android-14.0.0_r52'
 
@@ -54,39 +54,43 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           mkdir workspace && cd workspace
-          # 排除 prebuilts 整个组，防止大体积仓库被 checkout
           repo init --depth=1 --partial-clone \
             -u https://android.googlesource.com/platform/manifest \
             -b ${{ inputs.aosp_branch }} \
             -g "default,-kernel,-device,-emulator,-tests,-docs,-prebuilts_apps,-prebuilts,-darwin"
 
-      - name: Add Essential Prebuilt Projects via Local Manifest
+      # 同步清单中的全部源码（体积已大幅缩小）
+      - name: Sync Repo
         working-directory: ${{ github.workspace }}/workspace
         run: |
-          mkdir -p .repo/local_manifests
-          # 注意：不再定义 <remote>，直接使用默认的 aosp remote
-          cat > .repo/local_manifests/essential_prebuilts.xml << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <manifest>
-            <project path="prebuilts/clang/host/linux-x86" name="platform/prebuilts/clang/host/linux-x86" />
-            <project path="prebuilts/build-tools" name="platform/prebuilts/build-tools" />
-            <project path="prebuilts/sdk" name="platform/prebuilts/sdk" />
-            <project path="prebuilts/go/linux-x86" name="platform/prebuilts/go/linux-x86" />
-          </manifest>
-          EOF
+          repo sync -c --no-clone-bundle --no-tags --optimized-fetch \
+            --force-sync -j$(nproc)
 
-      - name: Fetch Lindroid Sources (Corrected Branches)
+      # 手动克隆编译必需的四个预构建（不在清单中，避免冲突）
+      - name: Clone Essential Prebuilts Manually
+        working-directory: ${{ github.workspace }}/workspace
+        env:
+          BRANCH: ${{ inputs.aosp_branch }}
+        run: |
+          git clone --depth=1 -b $BRANCH \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+            prebuilts/clang/host/linux-x86
+          git clone --depth=1 -b $BRANCH \
+            https://android.googlesource.com/platform/prebuilts/build-tools \
+            prebuilts/build-tools
+          git clone --depth=1 -b $BRANCH \
+            https://android.googlesource.com/platform/prebuilts/sdk \
+            prebuilts/sdk
+          git clone --depth=1 -b $BRANCH \
+            https://android.googlesource.com/platform/prebuilts/go/linux-x86 \
+            prebuilts/go/linux-x86
+
+      - name: Fetch Lindroid Sources
         working-directory: ${{ github.workspace }}/workspace
         run: |
           git clone https://github.com/Linux-on-droid/lindroid-drm-loopback.git vendor/lindroid-drm-loopback
           git clone -b lindroid-21 https://github.com/Linux-on-droid/vendor_lindroid.git vendor/lindroid
           git clone https://github.com/libhybris/libhybris.git external/libhybris
-
-      - name: Sync Repo
-        working-directory: ${{ github.workspace }}/workspace
-        run: |
-          repo sync -c --no-clone-bundle --no-tags --optimized-fetch \
-            --prune --force-sync -j$(nproc)
 
       - name: Apply frameworks/native Patch
         working-directory: ${{ github.workspace }}/workspace
