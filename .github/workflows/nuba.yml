@@ -59,8 +59,8 @@ jobs:
             -b ${{ inputs.aosp_branch }} \
             -g "default,-kernel,-device,-emulator,-tests,-docs,-prebuilts_apps,-prebuilts,-darwin"
 
-      # 移除已知无用的大项目，包括刚刚报错的两个
-      - name: Remove Known Large Unused Projects
+      # 移除已知无用且可能触发限速的项目
+      - name: Remove Known Large / Rate‑Limited Projects
         working-directory: ${{ github.workspace }}/workspace
         run: |
           mkdir -p .repo/local_manifests
@@ -69,35 +69,34 @@ jobs:
           <manifest>
             <remove-project name="platform/system/nfc"/>
             <remove-project name="platform/prebuilts/rust"/>
-            <!-- 刚刚 checkout 失败的项目，移除即可 -->
             <remove-project name="platform/external/setupcompat"/>
             <remove-project name="platform/sdk"/>
+            <!-- Rust crates 触发 HTTP 429，一并排除 -->
+            <remove-project name="platform/external/rust/crates/vhost-user-backend"/>
+            <remove-project name="platform/external/rust/crates/virtio-queue"/>
+            <!-- 如有其他 Rust crate 报错，可在这里继续添加 -->
           </manifest>
           EOF
 
       - name: Check Disk Space Before Sync
         working-directory: ${{ github.workspace }}/workspace
         run: |
-          echo "=== Disk space before sync ==="
           df -h .
-          echo "=== Inode usage ==="
           df -i .
 
-      - name: Sync Repo
+      # 降低并发 + 开启重试，避免 429 限速
+      - name: Sync Repo (low concurrency, retry fetches)
         working-directory: ${{ github.workspace }}/workspace
         run: |
           repo sync -c --no-clone-bundle --no-tags --optimized-fetch \
-            --force-sync -j$(nproc)
+            --force-sync -j2 --retry-fetches=5
 
       - name: Check Disk Space After Sync
         working-directory: ${{ github.workspace }}/workspace
         run: |
-          echo "=== Disk space after sync ==="
           df -h .
-          echo "=== Inode usage ==="
           df -i .
 
-      # 手动克隆必需的预构建（Clang, Build-tools, SDK, Go）
       - name: Clone Essential Prebuilts Manually
         working-directory: ${{ github.workspace }}/workspace
         env:
