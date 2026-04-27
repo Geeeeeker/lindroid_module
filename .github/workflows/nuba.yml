@@ -12,11 +12,10 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      # ========== 1. 扩展构建空间（并保护好根分区） ==========
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 6144          # 给根分区留 6 GB
+          root-reserve-mb: 6144
           swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
@@ -24,20 +23,16 @@ jobs:
           remove-codeql: 'true'
           remove-docker-images: 'true'
 
-      # ========== 2. 将 apt / tmp 等重定向到构建卷 ==========
-      - name: Redirect APT & Temp to Build Volume
+      # 只重定向 apt，不碰 TMPDIR
+      - name: Redirect APT Cache to Build Volume
         run: |
           BUILD_VOL="${{ github.workspace }}"
-          sudo mkdir -p $BUILD_VOL/apt_cache $BUILD_VOL/tmp
+          sudo mkdir -p $BUILD_VOL/apt_cache
           echo "Dir::Cache::archives \"$BUILD_VOL/apt_cache\";" | sudo tee /etc/apt/apt.conf.d/99custom
-          echo "TMPDIR=$BUILD_VOL/tmp" >> $GITHUB_ENV
-          echo "TMP=$BUILD_VOL/tmp" >> $GITHUB_ENV
-          echo "TEMP=$BUILD_VOL/tmp" >> $GITHUB_ENV
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
-          df -h /
+          sudo chmod 1777 /tmp
 
-      # ========== 3. 安装编译依赖 ==========
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
@@ -56,7 +51,6 @@ jobs:
           chmod a+x ~/bin/repo
           echo "$HOME/bin" >> $GITHUB_PATH
 
-      # ========== 4. 初始化并同步最小 AOSP 源码 ==========
       - name: Initialize & Sync Minimal AOSP Source
         run: |
           cd ${{ github.workspace }}
@@ -70,17 +64,13 @@ jobs:
           repo sync -c --no-clone-bundle --no-tags --optimized-fetch \
             --prune --force-sync -j$(nproc)
 
-      # ========== 5. 拉取 Lindroid 组件（修正分支） ==========
       - name: Fetch Lindroid Sources (Corrected Branches)
         working-directory: ${{ github.workspace }}/workspace
         run: |
-          # lindroid-drm-loopback 没有 lindroid-21 分支，这里使用 master
           git clone https://github.com/Linux-on-droid/lindroid-drm-loopback.git vendor/lindroid-drm-loopback
-          # vendor_lindroid 有 lindroid-21 分支，所以指定拉取它
           git clone -b lindroid-21 https://github.com/Linux-on-droid/vendor_lindroid.git vendor/lindroid
           git clone https://github.com/libhybris/libhybris.git external/libhybris
 
-      # ========== 6. 应用 frameworks/native 补丁（LXC 所需） ==========
       - name: Apply frameworks/native Patch
         working-directory: ${{ github.workspace }}/workspace
         run: |
@@ -90,17 +80,14 @@ jobs:
           rm lindroid.patch
           cd ../..
 
-      # ========== 7. 编译 LindroidUI 模块 ==========
       - name: Build LindroidUI
         working-directory: ${{ github.workspace }}/workspace
         run: |
           source build/envsetup.sh
           lunch aosp_arm64-userdebug
-          # LindroidUI 可能位于 vendor/lindroid-drm-loopback/LindroidUI（需根据实际目录调整）
           cd vendor/lindroid-drm-loopback/LindroidUI
           mma
 
-      # ========== 8. 收集产物 ==========
       - name: Prepare Artifact
         if: success()
         run: |
