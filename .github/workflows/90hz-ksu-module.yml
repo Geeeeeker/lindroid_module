@@ -1,0 +1,112 @@
+name: Build 90Hz Refresh Rate KSU Module and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      refresh_rate:
+        description: 'Target refresh rate (Hz)'
+        required: true
+        default: '90'
+        type: choice
+        options:
+          - '60'
+          - '90'
+          - '120'
+          - '144'
+      sysfs_path:
+        description: 'Custom sysfs path (leave empty for auto-detect)'
+        required: false
+        default: ''
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # 允许创建 Release 和 Tag
+    steps:
+      - name: Generate module files
+        env:
+          RATE: ${{ github.event.inputs.refresh_rate }}
+          CUSTOM_PATH: ${{ github.event.inputs.sysfs_path }}
+        run: |
+          mkdir -p module
+          cd module
+
+          # ---------- module.prop ----------
+          cat > module.prop << EOF
+          id=force_${RATE}hz
+          name=Force ${RATE}Hz Refresh Rate
+          version=v1.0
+          versionCode=1
+          author=YourName
+          description=Force screen refresh rate to ${RATE}Hz at boot via sysfs
+          EOF
+
+          # ---------- post-fs-data.sh ----------
+          cat > post-fs-data.sh << "SCRIPT"
+          #!/system/bin/sh
+          set -e
+
+          RATE="${1}"
+          CUSTOM_PATH="${2}"
+
+          # 常见刷新率控制节点，可根据设备自行增删
+          POSSIBLE_PATHS="
+            /sys/class/graphics/fb0/msm_fb_type
+            /sys/class/graphics/fb0/dynamic_fps
+            /sys/class/graphics/fb0/fps
+            /sys/devices/platform/soc/ae00000.qcom,mdss_mdp/caps/fps
+            /sys/kernel/debug/dri/0/DSI-1/refresh_rate
+            /sys/class/drm/card0/card0-DSI-1/refresh_rate
+            /sys/class/drm/card0/card0-DSI-1/mode
+          "
+
+          find_and_set() {
+            local target_rate=$1
+            # 优先使用自定义路径
+            if [ -n "$CUSTOM_PATH" ] && [ -f "$CUSTOM_PATH" ]; then
+              echo "$target_rate" > "$CUSTOM_PATH" 2>/dev/null && return 0
+            fi
+
+            for path in $POSSIBLE_PATHS; do
+              if [ -f "$path" ]; then
+                echo "$target_rate" > "$path" 2>/dev/null && return 0
+              fi
+            done
+            return 1
+          }
+
+          sleep 10
+          find_and_set "$RATE" || echo "Failed to set ${RATE}Hz, no valid sysfs node found" > /data/local/tmp/force_${RATE}hz_error.log
+          SCRIPT
+
+          # 替换占位符，写入实际参数
+          sed -i "s|\${1}|$RATE|g" post-fs-data.sh
+          sed -i "s|\${2}|$CUSTOM_PATH|g" post-fs-data.sh
+
+          chmod +x post-fs-data.sh
+
+          # 打包为 ZIP
+          ZIP_NAME="force-${RATE}hz-ksu-module.zip"
+          zip -r9 "../$ZIP_NAME" *
+          cd ..
+
+          # 生成 SHA-256 校验文件
+          sha256sum "$ZIP_NAME" > "${ZIP_NAME}.sha256"
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Create Release and Upload
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "force-${{ github.event.inputs.refresh_rate }}hz-${{ github.run_id }}"
+          name: "Force ${{ github.event.inputs.refresh_rate }}Hz Refresh Rate Module"
+          body: |
+            KernelSU module to force screen refresh rate to ${{ github.event.inputs.refresh_rate }}Hz.
+            - Install via KernelSU Manager or manually.
+            - If it does not work, check `/data/local/tmp/force_${{ github.event.inputs.refresh_rate }}hz_error.log`.
+            - SHA-256 checksum is provided for integrity verification.
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
